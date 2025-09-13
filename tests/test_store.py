@@ -34,3 +34,20 @@ def test_replacement_invalidates_the_transitive_plan_without_rewriting_its_proof
     assert store.get(route.ref).content == "team-a"
     with pytest.raises(UnsupportedMemory):
         store.recall("plan")
+
+
+def test_alternative_proof_survives_and_stops_propagation(store):
+    first, second = fact(store, "first"), fact(store, "second")
+    shared = store.derive(
+        "shared", "healthz", supports=((first.ref,), (second.ref,)), rule="endpoint/1"
+    ).memory
+    child = store.derive("child", "diagnose", supports=((shared.ref,),), rule="diagnose/1").memory
+    change = store.retract(first.ref, reason="First source withdrawn.")
+    assert change.invalidated == ()
+    assert change.rechecked == change.preserved == (shared.ref,)
+    assert child.ref not in change.rechecked
+    assert store.recall("child").state is State.SUPPORTED
+    explanation = store.explain(shared.ref)
+    assert explanation.satisfied_supports == ((second.ref,),)
+    final = store.retract(second.ref, reason="Last source withdrawn.")
+    assert final.invalidated == (shared.ref, child.ref)
