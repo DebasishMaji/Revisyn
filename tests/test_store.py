@@ -51,3 +51,11 @@ def test_alternative_proof_survives_and_stops_propagation(store):
     assert explanation.satisfied_supports == ((second.ref,),)
     final = store.retract(second.ref, reason="Last source withdrawn.")
     assert final.invalidated == (shared.ref, child.ref)
+
+
+def test_conjunction_needs_every_premise(store):
+    first, second = fact(store, "first"), fact(store, "second")
+    child = store.derive(
+        "child", "both-needed", supports=((first.ref, second.ref),), rule="both/1"
+    ).memory
+    assert store.retract(first.ref, reason="No longer true.").invalidated == (child.ref,)
