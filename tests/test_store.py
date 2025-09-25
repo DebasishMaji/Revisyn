@@ -59,3 +59,11 @@ def test_conjunction_needs_every_premise(store):
         "child", "both-needed", supports=((first.ref, second.ref),), rule="both/1"
     ).memory
     assert store.retract(first.ref, reason="No longer true.").invalidated == (child.ref,)
+
+
+def test_a_live_alternative_can_support_a_new_derivation_with_a_dead_alternative(store):
+    old, live = fact(store, "old"), fact(store, "live")
+    store.retract(old.ref, reason="Withdrawn evidence.")
+    derived = store.derive("choice", 1, supports=((old.ref,), (live.ref,)), rule="choice/1").memory
+    assert store.recall("choice") == derived
+    assert store.explain(derived.ref).satisfied_supports == ((live.ref,),)
