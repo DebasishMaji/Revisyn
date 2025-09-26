@@ -67,3 +67,12 @@ def test_a_live_alternative_can_support_a_new_derivation_with_a_dead_alternative
     derived = store.derive("choice", 1, supports=((old.ref,), (live.ref,)), rule="choice/1").memory
     assert store.recall("choice") == derived
     assert store.explain(derived.ref).satisfied_supports == ((live.ref,),)
+
+
+def test_diamond_is_rechecked_once_in_topological_order(store):
+    root = fact(store, "root")
+    left = store.derive("left", 1, supports=((root.ref,),), rule="left/1").memory
+    right = store.derive("right", 2, supports=((root.ref,),), rule="right/1").memory
+    bottom = store.derive("bottom", 3, supports=((left.ref, right.ref),), rule="join/1").memory
+    change = store.retract(root.ref, reason="Retract shared premise.")
+    assert change.invalidated == change.rechecked == (left.ref, right.ref, bottom.ref)
