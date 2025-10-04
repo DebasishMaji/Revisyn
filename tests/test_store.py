@@ -76,3 +76,16 @@ def test_diamond_is_rechecked_once_in_topological_order(store):
     bottom = store.derive("bottom", 3, supports=((left.ref, right.ref),), rule="join/1").memory
     change = store.retract(root.ref, reason="Retract shared premise.")
     assert change.invalidated == change.rechecked == (left.ref, right.ref, bottom.ref)
+
+
+def test_recomputation_requires_a_new_derived_revision(store):
+    root = fact(store, "root")
+    old = store.derive("summary", "old", supports=((root.ref,),), rule="summarize/1").memory
+    new_root = store.observe("root", "new", source="source/2", replaces=root.ref).memory
+    assert store.get(old.ref).state is State.INVALIDATED
+    new = store.derive(
+        "summary", "new", supports=((new_root.ref,),), rule="summarize/2", replaces=old.ref
+    ).memory
+    assert store.recall("summary") == new
+    assert store.get(old.ref).state is State.SUPERSEDED
+    assert store.get(old.ref).superseded_by == new.ref
