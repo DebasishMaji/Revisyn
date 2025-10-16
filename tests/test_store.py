@@ -89,3 +89,13 @@ def test_recomputation_requires_a_new_derived_revision(store):
     assert store.recall("summary") == new
     assert store.get(old.ref).state is State.SUPERSEDED
     assert store.get(old.ref).superseded_by == new.ref
+
+
+def test_new_observation_does_not_reactivate_old_derivations(store):
+    root = fact(store, "root")
+    derived = store.derive("plan", "old", supports=((root.ref,),), rule="plan/1").memory
+    store.retract(root.ref, reason="Source withdrawn.")
+    store.observe("root", root.content, source="source/2", replaces=root.ref)
+    assert store.get(derived.ref).state is State.INVALIDATED
+    with pytest.raises(UnsupportedMemory):
+        store.recall("plan")
