@@ -99,3 +99,15 @@ def test_new_observation_does_not_reactivate_old_derivations(store):
     assert store.get(derived.ref).state is State.INVALIDATED
     with pytest.raises(UnsupportedMemory):
         store.recall("plan")
+
+
+def test_revision_cannot_be_justified_by_the_version_it_supersedes(store):
+    root = fact(store, "root")
+    summary = store.derive("summary", 1, supports=((root.ref,),), rule="summary/1").memory
+    before = store.memories(include_history=True)
+    with pytest.raises(UnsupportedMemory, match="survives"):
+        store.derive(
+            "summary", 2, supports=((summary.ref,),), rule="summary/2", replaces=summary.ref
+        )
+    assert store.memories(include_history=True) == before
+    assert store.recall("summary") == summary
