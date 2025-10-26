@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from revisyn import (
+    MemoryNotFound,
     MemoryStore,
     State,
     UnsupportedMemory,
@@ -111,3 +112,14 @@ def test_revision_cannot_be_justified_by_the_version_it_supersedes(store):
         )
     assert store.memories(include_history=True) == before
     assert store.recall("summary") == summary
+
+
+def test_invalid_derived_creation_rolls_back_head_payload_and_events(store):
+    root = fact(store, "root")
+    store.retract(root.ref, reason="Unavailable evidence.")
+    before = store.memories(include_history=True)
+    with pytest.raises(UnsupportedMemory):
+        store.derive("bad", "stale", supports=((root.ref,),), rule="bad/1")
+    assert store.memories(include_history=True) == before
+    with pytest.raises(MemoryNotFound):
+        store.recall("bad")
