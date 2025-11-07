@@ -123,3 +123,23 @@ def test_invalid_derived_creation_rolls_back_head_payload_and_events(store):
     assert store.memories(include_history=True) == before
     with pytest.raises(MemoryNotFound):
         store.recall("bad")
+
+
+def test_cascade_failure_rolls_back_the_entire_replacement(store, monkeypatch):
+    root = fact(store, "root")
+    child = store.derive("child", 1, supports=((root.ref,),), rule="child/1").memory
+    before = store.memories(include_history=True)
+    events = store.history(root.ref)
+    original = store._event
+
+    def injected(ref, state, *args, **kwargs):
+        original(ref, state, *args, **kwargs)
+        if state is State.INVALIDATED:
+            raise RuntimeError("Injected cascade failure")
+
+    monkeypatch.setattr(store, "_event", injected)
+    with pytest.raises(RuntimeError, match="Injected cascade"):
+        store.observe("root", 2, source="source/2", replaces=root.ref)
+    assert store.memories(include_history=True) == before
+    assert store.history(root.ref) == events
+    assert store.recall("child").ref == child.ref
