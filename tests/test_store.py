@@ -3,8 +3,10 @@ from pathlib import Path
 import pytest
 
 from revisyn import (
+    KeyConflict,
     MemoryNotFound,
     MemoryStore,
+    RevisionConflict,
     State,
     UnsupportedMemory,
 )
@@ -143,3 +145,20 @@ def test_cascade_failure_rolls_back_the_entire_replacement(store, monkeypatch):
     assert store.memories(include_history=True) == before
     assert store.history(root.ref) == events
     assert store.recall("child").ref == child.ref
+
+
+def test_revision_preconditions_prevent_lost_updates_and_kind_changes(store):
+    root = fact(store, "root")
+    other = fact(store, "other")
+    with pytest.raises(KeyConflict):
+        fact(store, "root")
+    with pytest.raises(RevisionConflict):
+        store.observe("root", 2, source="v2", replaces=other.ref)
+    with pytest.raises(RevisionConflict):
+        store.derive("root", 2, supports=((other.ref,),), rule="v2", replaces=root.ref)
+    store.observe("root", 2, source="v2", replaces=root.ref)
+    with pytest.raises(RevisionConflict):
+        store.observe("root", 3, source="v3", replaces=root.ref)
+    with pytest.raises(RevisionConflict):
+        store.retract(root.ref, reason="Stale writer.")
+    assert store.recall("root").content == 2
