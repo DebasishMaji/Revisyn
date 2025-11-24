@@ -5,7 +5,9 @@ import pytest
 from revisyn import (
     KeyConflict,
     MemoryNotFound,
+    MemoryRef,
     MemoryStore,
+    NamespaceMismatch,
     RevisionConflict,
     State,
     UnsupportedMemory,
@@ -162,3 +164,19 @@ def test_revision_preconditions_prevent_lost_updates_and_kind_changes(store):
     with pytest.raises(RevisionConflict):
         store.retract(root.ref, reason="Stale writer.")
     assert store.recall("root").content == 2
+
+
+def test_scoped_references_and_queries_do_not_cross_namespaces(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="a") as first, MemoryStore(path, namespace="b") as second:
+        root = fact(first, "same-key")
+        fact(second, "same-key")
+        with pytest.raises(NamespaceMismatch):
+            second.get(root.ref)
+        with pytest.raises(NamespaceMismatch):
+            second.derive("bad", 1, supports=((root.ref,),), rule="v1")
+        with pytest.raises(MemoryNotFound):
+            second.get(MemoryRef("b", root.ref.id))
+        assert len(first.memories()) == len(second.memories()) == 1
+        with pytest.raises(AttributeError):
+            first.namespace = "b"
