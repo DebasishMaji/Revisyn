@@ -180,3 +180,13 @@ def test_scoped_references_and_queries_do_not_cross_namespaces(tmp_path):
         assert len(first.memories()) == len(second.memories()) == 1
         with pytest.raises(AttributeError):
             first.namespace = "b"
+
+
+def test_references_from_another_database_do_not_alias_local_sequence_numbers(tmp_path):
+    with MemoryStore(tmp_path / "a.sqlite3", namespace="same") as first:
+        foreign = fact(first, "same")
+    with MemoryStore(tmp_path / "b.sqlite3", namespace="same") as second:
+        local = fact(second, "same")
+        assert local.sequence == foreign.sequence
+        with pytest.raises(MemoryNotFound):
+            second.get(foreign.ref)
