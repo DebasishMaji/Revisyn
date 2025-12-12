@@ -190,3 +190,12 @@ def test_references_from_another_database_do_not_alias_local_sequence_numbers(tm
         assert local.sequence == foreign.sequence
         with pytest.raises(MemoryNotFound):
             second.get(foreign.ref)
+
+
+def test_snapshots_and_json_payloads_are_detached_from_callers(store):
+    content = {"items": [1, 0.125, {"active": True}]}
+    root = store.observe("json", content, source="json/1").memory
+    content["items"].append("caller mutation")
+    read = root.content
+    read["items"].append("snapshot mutation")
+    assert store.recall("json").content == {"items": [1, 0.125, {"active": True}]}
