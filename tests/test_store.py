@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from revisyn import (
+    InvalidContent,
     KeyConflict,
     MemoryNotFound,
     MemoryRef,
@@ -199,3 +200,12 @@ def test_snapshots_and_json_payloads_are_detached_from_callers(store):
     read = root.content
     read["items"].append("snapshot mutation")
     assert store.recall("json").content == {"items": [1, 0.125, {"active": True}]}
+
+
+@pytest.mark.parametrize(
+    "content", [float("nan"), float("inf"), {"bad": object()}, {1: "coerced"}, (1, 2), b"binary"]
+)
+def test_invalid_content_is_rejected_without_creating_memory(store, content):
+    with pytest.raises(InvalidContent):
+        store.observe("bad", content, source="input")
+    assert store.memories() == ()
