@@ -209,3 +209,15 @@ def test_invalid_content_is_rejected_without_creating_memory(store, content):
     with pytest.raises(InvalidContent):
         store.observe("bad", content, source="input")
     assert store.memories() == ()
+
+
+def test_cycles_in_content_fail_explicitly_but_shared_json_containers_are_valid(store):
+    cycle = []
+    cycle.append(cycle)
+    with pytest.raises(InvalidContent):
+        store.observe("cycle", cycle, source="input")
+    shared = [1, 2]
+    assert store.observe("shared", [shared, shared], source="input").memory.content == [
+        [1, 2],
+        [1, 2],
+    ]
