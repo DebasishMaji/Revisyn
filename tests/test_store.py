@@ -4,6 +4,7 @@ import pytest
 
 from revisyn import (
     InvalidContent,
+    InvalidSupport,
     KeyConflict,
     MemoryNotFound,
     MemoryRef,
@@ -221,3 +222,15 @@ def test_cycles_in_content_fail_explicitly_but_shared_json_containers_are_valid(
         [1, 2],
         [1, 2],
     ]
+
+
+def test_support_sets_reject_empty_duplicate_missing_and_untyped_premises(store):
+    root = fact(store, "root")
+    for proofs in ((), ((),), ((root.ref, root.ref),), ((root.ref,), (root.ref,))):
+        with pytest.raises(InvalidSupport):
+            store.derive("bad", 1, supports=proofs, rule="input")
+    with pytest.raises(TypeError):
+        store.derive("bad", 1, supports=(("bare-id",),), rule="input")
+    with pytest.raises(MemoryNotFound):
+        store.derive("bad", 1, supports=((MemoryRef(store.namespace, "unknown"),),), rule="input")
+    assert store.memories() == (root,)
