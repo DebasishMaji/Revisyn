@@ -234,3 +234,25 @@ def test_support_sets_reject_empty_duplicate_missing_and_untyped_premises(store)
     with pytest.raises(MemoryNotFound):
         store.derive("bad", 1, supports=((MemoryRef(store.namespace, "unknown"),),), rule="input")
     assert store.memories() == (root,)
+
+
+def test_retraction_and_explanation_survive_reopening(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="demo") as store:
+        root = fact(store, "root")
+        child = store.derive("child", 1, supports=((root.ref,),), rule="child/1").memory
+        store.retract(root.ref, reason="Catalog correction.")
+    with MemoryStore(path, namespace="demo") as restarted:
+        explanation = restarted.explain(child.ref)
+        assert explanation.target.state is State.INVALIDATED
+        assert explanation.satisfied_supports == ()
+        assert [event.state for event in explanation.events] == [
+            State.SUPPORTED,
+            State.SUPPORTED,
+            State.RETRACTED,
+            State.INVALIDATED,
+        ]
+        assert explanation.events[-1].caused_by == root.ref
+        assert restarted.history(root.ref)[-1].reason == "Catalog correction."
+        with pytest.raises(UnsupportedMemory):
+            restarted.recall("child")
