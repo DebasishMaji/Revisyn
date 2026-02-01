@@ -12,6 +12,7 @@ from revisyn import (
     NamespaceMismatch,
     RevisionConflict,
     State,
+    StoreClosed,
     UnsupportedMemory,
 )
 
@@ -256,3 +257,14 @@ def test_retraction_and_explanation_survive_reopening(tmp_path):
         assert restarted.history(root.ref)[-1].reason == "Catalog correction."
         with pytest.raises(UnsupportedMemory):
             restarted.recall("child")
+
+
+def test_closed_stores_and_missing_entries_fail_explicitly(store):
+    with pytest.raises(MemoryNotFound):
+        store.history(MemoryRef(store.namespace, "missing"))
+    with pytest.raises(MemoryNotFound):
+        store.recall("missing")
+    store.close()
+    store.close()
+    with pytest.raises(StoreClosed):
+        store.memories()
