@@ -1,3 +1,5 @@
+import sqlite3
+import stat
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from revisyn import (
     MemoryStore,
     NamespaceMismatch,
     RevisionConflict,
+    SchemaError,
     State,
     StoreClosed,
     UnsupportedMemory,
@@ -268,3 +271,16 @@ def test_closed_stores_and_missing_entries_fail_explicitly(store):
     store.close()
     with pytest.raises(StoreClosed):
         store.memories()
+
+
+def test_new_files_are_private_and_unrelated_databases_are_not_adopted(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="demo"):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    unrelated = tmp_path / "unrelated.sqlite3"
+    with sqlite3.connect(unrelated) as database:
+        database.execute("CREATE TABLE unrelated(value)")
+    before = unrelated.read_bytes()
+    with pytest.raises(SchemaError):
+        MemoryStore(unrelated, namespace="demo")
+    assert unrelated.read_bytes() == before
