@@ -284,3 +284,13 @@ def test_new_files_are_private_and_unrelated_databases_are_not_adopted(tmp_path)
     with pytest.raises(SchemaError):
         MemoryStore(unrelated, namespace="demo")
     assert unrelated.read_bytes() == before
+
+
+def test_future_schema_is_rejected(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="demo"):
+        pass
+    with sqlite3.connect(path) as database:
+        database.execute("PRAGMA user_version = 2")
+    with pytest.raises(SchemaError):
+        MemoryStore(path, namespace="demo")
