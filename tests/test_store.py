@@ -294,3 +294,16 @@ def test_future_schema_is_rejected(tmp_path):
         database.execute("PRAGMA user_version = 2")
     with pytest.raises(SchemaError):
         MemoryStore(path, namespace="demo")
+
+
+def test_deep_proof_chains_do_not_depend_on_python_recursion(store):
+    root = fact(store, "root")
+    previous = root
+    for index in range(1200):
+        previous = store.derive(
+            f"chain-{index}", index, supports=((previous.ref,),), rule="chain/1"
+        ).memory
+    assert len(store.explain(previous.ref).memories) == 1201
+    change = store.retract(root.ref, reason="Withdraw long-chain premise.")
+    assert len(change.invalidated) == 1200
+    assert store.get(previous.ref).state is State.INVALIDATED
