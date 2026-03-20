@@ -1,6 +1,8 @@
 import sqlite3
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -307,3 +309,25 @@ def test_deep_proof_chains_do_not_depend_on_python_recursion(store):
     change = store.retract(root.ref, reason="Withdraw long-chain premise.")
     assert len(change.invalidated) == 1200
     assert store.get(previous.ref).state is State.INVALIDATED
+
+
+def test_two_writers_cannot_replace_the_same_revision(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="demo") as store:
+        original = fact(store, "root")
+    barrier = Barrier(2)
+
+    def writer(value):
+        with MemoryStore(path, namespace="demo") as store:
+            barrier.wait(timeout=5)
+            try:
+                store.observe("root", value, source="writer", replaces=original.ref)
+            except RevisionConflict:
+                return "conflict"
+            return "committed"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(writer, value) for value in (1, 2)]
+        assert sorted(future.result(timeout=10) for future in futures) == ["committed", "conflict"]
+    with MemoryStore(path, namespace="demo") as store:
+        assert len(store.memories(include_history=True)) == 2
