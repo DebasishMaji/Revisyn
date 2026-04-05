@@ -331,3 +331,28 @@ def test_two_writers_cannot_replace_the_same_revision(tmp_path):
         assert sorted(future.result(timeout=10) for future in futures) == ["committed", "conflict"]
     with MemoryStore(path, namespace="demo") as store:
         assert len(store.memories(include_history=True)) == 2
+
+
+def test_explanation_uses_one_snapshot_during_a_concurrent_retraction(store, monkeypatch):
+    root = fact(store, "root")
+    child = store.derive("child", 1, supports=((root.ref,),), rule="child/1").memory
+    original = store._load
+    triggered = False
+
+    def withdraw():
+        with MemoryStore(store.path, namespace=store.namespace) as writer:
+            writer.retract(root.ref, reason="Concurrent update.")
+
+    def interleaved(ref):
+        nonlocal triggered
+        result = original(ref)
+        if ref == child.ref and not triggered:
+            triggered = True
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(withdraw).result(timeout=10)
+        return result
+
+    monkeypatch.setattr(store, "_load", interleaved)
+    explanation = store.explain(child.ref)
+    assert all(memory.state is State.SUPPORTED for memory in explanation.memories)
+    assert store.get(child.ref).state is State.INVALIDATED
