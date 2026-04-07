@@ -1,3 +1,4 @@
+import random
 import sqlite3
 import stat
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +11,7 @@ from revisyn import (
     InvalidContent,
     InvalidSupport,
     KeyConflict,
+    Kind,
     MemoryNotFound,
     MemoryRef,
     MemoryStore,
@@ -356,3 +358,36 @@ def test_explanation_uses_one_snapshot_during_a_concurrent_retraction(store, mon
     explanation = store.explain(child.ref)
     assert all(memory.state is State.SUPPORTED for memory in explanation.memories)
     assert store.get(child.ref).state is State.INVALIDATED
+
+
+@pytest.mark.parametrize("seed", [0, 7, 42])
+def test_selective_updates_match_an_independent_full_proof_recomputation(store, seed):
+    rng = random.Random(seed)
+    roots = [fact(store, f"root-{index}") for index in range(8)]
+    all_nodes = list(roots)
+    for index in range(90):
+        alternatives = set()
+        for _ in range(rng.randint(1, 3)):
+            alternatives.add(
+                tuple(sorted(node.ref for node in rng.sample(all_nodes, rng.randint(1, 3))))
+            )
+        node = store.derive(
+            f"derived-{index}", index, supports=sorted(alternatives), rule="generated/1"
+        ).memory
+        all_nodes.append(node)
+    available_roots = {root.ref for root in roots}
+    for root in rng.sample(roots, 5):
+        available_roots.remove(root.ref)
+        store.retract(root.ref, reason="Generated evidence withdrawal.")
+        expected = {}
+        for memory in store.memories(include_history=True):
+            if memory.kind is Kind.FACT:
+                supported = memory.ref in available_roots
+            else:
+                supported = any(
+                    all(expected[parent] for parent in group) for group in memory.supports
+                )
+            expected[memory.ref] = supported
+            assert (memory.state is State.SUPPORTED) == supported, memory.key
+    with sqlite3.connect(store.path) as database:
+        assert database.execute("PRAGMA foreign_key_check").fetchall() == []
