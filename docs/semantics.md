@@ -82,6 +82,10 @@ SQLite serializes writers. Reference preconditions are checked inside that write
 transaction. Exceptions roll back the entire mutation, including cascading
 changes and events. Unexpected storage errors propagate.
 
+The new revision's creation event points to the revision it replaces. The old
+revision's supersession event points forward to the replacement. These are audit
+links, not new support edges.
+
 Each read method holds one consistent transaction. A concurrent writer cannot
 make an explanation combine a new premise state with an old conclusion state.
 Use a local filesystem and one `MemoryStore` connection per thread. Different

@@ -54,7 +54,9 @@ class MemoryStore:
             self._connection.execute("PRAGMA synchronous = FULL")
             with self._transaction(write=True):
                 self._initialize()
-            self._connection.execute("PRAGMA journal_mode = WAL")
+            mode = self._connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            if mode != "wal":
+                raise SchemaError("Revisyn requires SQLite write-ahead logging.")
             setup.pop_all()
 
     @property
@@ -260,7 +262,13 @@ class MemoryStore:
                     "INSERT INTO supports(namespace,child_id,clause,parent_id) VALUES (?,?,?,?)",
                     [(self.namespace, ref.id, index, parent.id) for parent in group],
                 )
-            self._event(ref, State.SUPPORTED, reason, now)
+            self._event(
+                ref,
+                State.SUPPORTED,
+                reason,
+                now,
+                caused_by=previous.ref if previous is not None else None,
+            )
             self._connection.execute(
                 "INSERT INTO heads(namespace,key,memory_id) VALUES (?,?,?) "
                 "ON CONFLICT(namespace,key) DO UPDATE SET memory_id = excluded.memory_id",

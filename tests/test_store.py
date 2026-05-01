@@ -45,6 +45,7 @@ def test_replacement_invalidates_the_transitive_plan_without_rewriting_its_proof
     assert store.recall("owner").ref == replacement.memory.ref
     assert store.get(owner.ref).state is State.SUPERSEDED
     assert store.get(owner.ref).superseded_by == replacement.memory.ref
+    assert store.history(replacement.memory.ref)[0].caused_by == owner.ref
     assert store.get(route.ref).supports == ((owner.ref,),)
     assert store.get(route.ref).content == "team-a"
     with pytest.raises(UnsupportedMemory):
@@ -298,6 +299,23 @@ def test_future_schema_is_rejected(tmp_path):
         database.execute("PRAGMA user_version = 2")
     with pytest.raises(SchemaError):
         MemoryStore(path, namespace="demo")
+
+
+def test_unavailable_wal_mode_is_not_silently_accepted(tmp_path, monkeypatch):
+    original = sqlite3.connect
+
+    class WithoutWAL(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if sql == "PRAGMA journal_mode = WAL":
+                sql = "PRAGMA journal_mode"
+            return super().execute(sql, parameters)
+
+    def connect(*args, **kwargs):
+        return original(*args, factory=WithoutWAL, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with pytest.raises(SchemaError, match="write-ahead"):
+        MemoryStore(tmp_path / "memory.sqlite3", namespace="demo")
 
 
 def test_deep_proof_chains_do_not_depend_on_python_recursion(store):
