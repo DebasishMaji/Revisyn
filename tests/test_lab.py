@@ -34,3 +34,11 @@ def test_weak_controls_show_staleness_and_over_invalidation_separately(report):
     assert latest.unnecessary_blocks == ()
     assert blanket.incorrect == ()
     assert blanket.unnecessary_blocks == ("health-check", "diagnostic-plan")
+
+
+def test_omitted_dependency_remains_a_real_failure_for_both_proof_aware_methods(report):
+    selective = row(report, Scenario.OMITTED_DEPENDENCY, Policy.SELECTIVE)
+    baseline = row(report, Scenario.OMITTED_DEPENDENCY, Policy.FULL_RECOMPUTATION)
+    assert selective.incorrect == baseline.incorrect == ("deploy-plan",)
+    assert selective.returned == baseline.returned
+    assert selective.unnecessary_blocks == baseline.unnecessary_blocks == ()
