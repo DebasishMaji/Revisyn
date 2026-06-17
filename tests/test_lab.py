@@ -42,3 +42,11 @@ def test_omitted_dependency_remains_a_real_failure_for_both_proof_aware_methods(
     assert selective.incorrect == baseline.incorrect == ("deploy-plan",)
     assert selective.returned == baseline.returned
     assert selective.unnecessary_blocks == baseline.unnecessary_blocks == ()
+
+
+def test_reports_are_deterministic_and_do_not_claim_executed_actions(report):
+    assert len(report.results) == 8
+    encoded = report.as_dict()
+    assert encoded == run_lab().as_dict()
+    assert encoded["unit"] == "stored_plan_reuse_not_executed_actions"
+    assert encoded["laboratory"] == "ownership-transfer/1"
