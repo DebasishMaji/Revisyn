@@ -1,6 +1,10 @@
+import json
+from dataclasses import replace
+
 import pytest
 
-from revisyn.lab import Policy, Scenario, run_lab
+from revisyn import MemoryStore
+from revisyn.lab import Policy, Scenario, _correct_in_world, run_lab, seed_deployment
 
 
 @pytest.fixture(scope="module")
@@ -50,3 +54,23 @@ def test_reports_are_deterministic_and_do_not_claim_executed_actions(report):
     assert encoded == run_lab().as_dict()
     assert encoded["unit"] == "stored_plan_reuse_not_executed_actions"
     assert encoded["laboratory"] == "ownership-transfer/1"
+
+
+def test_world_oracle_checks_payload_not_memory_support_flags(tmp_path):
+    with MemoryStore(tmp_path / "memory.sqlite3", namespace="test") as store:
+        seed = seed_deployment(store)
+        assert not _correct_in_world(seed.deploy, owner="B")
+        correct = replace(
+            seed.deploy,
+            content_json=json.dumps(
+                {"action": "deploy", "service": "orders", "approval_team": "B"}
+            ),
+        )
+        assert _correct_in_world(correct, owner="B")
+        wrong_resource = replace(
+            correct,
+            content_json=json.dumps(
+                {"action": "deploy", "service": "billing", "approval_team": "B"}
+            ),
+        )
+        assert not _correct_in_world(wrong_resource, owner="B")
