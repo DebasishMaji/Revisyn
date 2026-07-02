@@ -74,3 +74,17 @@ def test_world_oracle_checks_payload_not_memory_support_flags(tmp_path):
             ),
         )
         assert not _correct_in_world(wrong_resource, owner="B")
+
+
+def test_oracle_scores_the_actual_returned_payload_not_the_seeded_plan(monkeypatch):
+    original = MemoryStore.recall
+
+    def altered(store, key):
+        memory = original(store, key)
+        if key == "health-check":
+            return replace(memory, content_json='{"action":"check","path":"/wrong"}')
+        return memory
+
+    monkeypatch.setattr(MemoryStore, "recall", altered)
+    result = row(run_lab(), Scenario.COMPLETE, Policy.SELECTIVE)
+    assert result.incorrect == ("health-check",)
