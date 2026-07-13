@@ -19,6 +19,9 @@ classifiers = [
 Repository = "https://github.com/DebasishMaji/Revisyn"
 Issues = "https://github.com/DebasishMaji/Revisyn/issues"
 
+[project.scripts]
+revisyn = "revisyn.cli:main"
+
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
@@ -39,4 +42,4 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src"]
+files = ["src", "examples"]

@@ -1,5 +1,8 @@
 import json
+import subprocess
+import sys
 from dataclasses import replace
+from importlib.metadata import version
 
 import pytest
 
@@ -88,3 +91,21 @@ def test_oracle_scores_the_actual_returned_payload_not_the_seeded_plan(monkeypat
     monkeypatch.setattr(MemoryStore, "recall", altered)
     result = row(run_lab(), Scenario.COMPLETE, Policy.SELECTIVE)
     assert result.incorrect == ("health-check",)
+
+
+def test_cli_outputs_json_and_installed_entrypoint_matches():
+    module = subprocess.run(
+        [sys.executable, "-m", "revisyn", "lab"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert module.returncode == 0, module.stderr
+    assert module.stderr == ""
+    assert json.loads(module.stdout) == run_lab().as_dict()
+    installed = subprocess.run(
+        ["revisyn", "--version"], capture_output=True, text=True, timeout=10, check=False
+    )
+    assert installed.returncode == 0
+    assert installed.stdout == f"revisyn {version('revisyn')}\n"
