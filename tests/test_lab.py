@@ -109,3 +109,17 @@ def test_cli_outputs_json_and_installed_entrypoint_matches():
     )
     assert installed.returncode == 0
     assert installed.stdout == f"revisyn {version('revisyn')}\n"
+
+
+@pytest.mark.parametrize("arguments", [[], ["inspect"], ["lab", "--target", "production"]])
+def test_cli_argument_errors_are_nonzero(arguments):
+    result = subprocess.run(
+        [sys.executable, "-m", "revisyn", *arguments],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "error:" in result.stderr
