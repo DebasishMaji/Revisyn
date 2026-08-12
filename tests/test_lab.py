@@ -3,6 +3,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from importlib.metadata import version
+from pathlib import Path
 
 import pytest
 
@@ -123,3 +124,23 @@ def test_cli_argument_errors_are_nonzero(arguments):
     assert result.returncode == 2
     assert result.stdout == ""
     assert "error:" in result.stderr
+
+
+def test_demo_reopens_rederives_and_refuses_to_overwrite(tmp_path):
+    example = Path(__file__).resolve().parents[1] / "examples/memory_retraction.py"
+    directory = tmp_path / "demo"
+    command = [sys.executable, str(example), "--directory", str(directory)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "Invalidated: approval-route, deploy-plan" in result.stdout
+    assert "public-health-contract" in result.stdout
+    assert "downstream diagnostic plan was not rechecked" in result.stdout
+    assert "separate, explicit derivation" in result.stdout
+    assert "missing-edge case stays wrong" in result.stdout
+    with MemoryStore(directory / "memory.sqlite3", namespace="orders") as store:
+        assert store.recall("deploy-plan").content["approval_team"] == "B"
+    before = (directory / "memory.sqlite3").read_bytes()
+    repeated = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    assert repeated.returncode == 2
+    assert "Cannot create demo directory" in repeated.stderr
+    assert (directory / "memory.sqlite3").read_bytes() == before
