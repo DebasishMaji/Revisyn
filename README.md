@@ -23,6 +23,8 @@ not silently become a justification for a plan written for the old owner.
 ## A small API
 
 ```sh
+git clone https://github.com/DebasishMaji/Revisyn.git
+cd Revisyn
 uv sync --locked
 ```
 
@@ -88,6 +90,31 @@ ancestors, and their event histories. Evidence and derived content survive resta
 
 See [the semantics](docs/semantics.md) for the transaction and revision contract.
 
+## Run the memory-change demo
+
+```sh
+uv run python examples/memory_retraction.py
+uv run revisyn lab > comparison.json
+```
+
+The demo transfers a service from team A to team B. The old approval route and
+deployment plan become unavailable, including after reopening the store. A health
+check retains an alternative proof from the public API contract; its diagnostic
+descendant does not need rechecking. A separate explicit derivation creates the
+new team's deployment plan.
+
+Use `--directory ./memory-demo` to retain the demo database in a **new** directory.
+Existing paths are rejected. No model, API key, or external service is required.
+
+The fixed laboratory compares latest-record reuse, blanket descendant invalidation,
+full proof recomputation, and Revisyn on identical declared inputs. The complete
+case matches full recomputation. The omitted-dependency case remains wrong under
+both proof-aware methods, as detected by a separate world-state oracle.
+
+The unit is stored-plan reuse, not executed deployments or model accuracy.
+See the [laboratory contract](docs/laboratory.md) and
+[research direction](docs/research.md).
+
 ## What supported does not mean
 
 It means supported by the **declared graph**, not verified true in the world.
@@ -108,6 +135,11 @@ Truth maintenance and incremental view maintenance predate agent memory.
 The research question is whether explicit dependencies improve downstream action
 correctness under controlled changes and incomplete provenance. No algorithmic
 novelty or comparative model result is claimed.
+
+Revisyn concerns recorded evidence and retrieval. The complementary
+[Aegentra](https://github.com/DebasishMaji/Aegentra) project concerns ambiguous
+external tool effects. These are separate boundaries; no automatic integration
+is included.
 
 ## Development
 
