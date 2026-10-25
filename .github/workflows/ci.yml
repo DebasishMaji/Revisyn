@@ -13,6 +13,8 @@ jobs:
     strategy:
       matrix:
         python: ["3.11", "3.12", "3.13"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,6 +22,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --python "${{ matrix.python }}"
+      - name: Verify the matrix interpreter
+        run: |
+          uv run python -c \
+            "import os, sys; assert '.'.join(map(str, sys.version_info[:2])) == os.environ['UV_PYTHON']"
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
