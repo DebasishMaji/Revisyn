@@ -4,12 +4,13 @@ Start with a stale-memory trace and the expected external-world decision.
 The declared graph is not itself the correctness oracle.
 
 ```sh
-uv sync --locked
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy
-uv run python examples/memory_retraction.py
+uv sync --locked --extra langgraph
+uv run --extra langgraph pytest
+uv run --extra langgraph ruff check .
+uv run --extra langgraph ruff format --check .
+uv run --extra langgraph mypy
+uv run --extra langgraph python examples/memory_retraction.py
+uv run --extra langgraph python examples/langgraph_memory.py
 uv build
 ```
 
@@ -20,6 +21,12 @@ rollback. Do not silently rebind an old proof to a replacement fact.
 Retrieval must not return an invalidated current revision as supported.
 Audit APIs deliberately expose historical content and must stay distinguishable
 from guarded retrieval. Namespace selection is application-owned, not model-owned.
+
+Optional integrations must not enter the core import path. Exercise guarded
+tools inside a compiled graph. Unsupported results must contain no historical
+payload, exposed keys must be application-controlled, and unexpected store errors
+must propagate rather than turning into missing memories. Keep synchronous
+SQLite work in the connection's owning thread.
 
 Keep the independent oracle and missing-dependency failure in the laboratory.
 A strong recomputation baseline matching Revisyn is the expected result.
