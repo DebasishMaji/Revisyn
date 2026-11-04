@@ -4,13 +4,28 @@ from .errors import (
     KeyConflict,
     MemoryNotFound,
     NamespaceMismatch,
+    ReadOnlyStore,
     RevisionConflict,
     RevisynError,
     SchemaError,
+    SnapshotUsageError,
     StoreClosed,
+    StoreUsageError,
     UnsupportedMemory,
 )
-from .models import Change, Explanation, JSONValue, Kind, Memory, MemoryEvent, MemoryRef, State
+from .models import (
+    Change,
+    Explanation,
+    JSONValue,
+    Kind,
+    Memory,
+    MemoryEvent,
+    MemoryEventPage,
+    MemoryPage,
+    MemoryRef,
+    State,
+)
+from .snapshot import DatabaseSnapshot, SnapshotInfo, snapshot_database
 from .store import MemoryStore
 
 __all__ = [
@@ -33,4 +48,12 @@ __all__ = [
     "State",
     "StoreClosed",
     "UnsupportedMemory",
+    "ReadOnlyStore",
+    "StoreUsageError",
+    "SnapshotUsageError",
+    "MemoryPage",
+    "MemoryEventPage",
+    "DatabaseSnapshot",
+    "SnapshotInfo",
+    "snapshot_database",
 ]

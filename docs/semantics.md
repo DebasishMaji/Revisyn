@@ -90,10 +90,23 @@ Each read method holds one consistent transaction. A concurrent writer cannot
 make an explanation combine a new premise state with an old conclusion state.
 Use a local filesystem and one `MemoryStore` connection per thread. Different
 connections can access the same file; no distributed-worker contract is implied.
+The store checks both process and thread ownership, including on close.
+`read_only=True` opens an existing file without initialization or WAL conversion;
+each read still observes a fresh per-call transaction. Valid writes through this
+mode raise `ReadOnlyStore`. `require_existing=True` rejects missing or
+uninitialized writable state; default construction retains deliberate provisioning.
 
 Namespace selection is trusted application configuration, not access control.
 Content and provenance are plaintext. Protect the database and sidecars and do
 not open untrusted database files.
+
+`list_memories` and `list_events` provide bounded record-count pages with
+sequence cursors; the existing convenience enumeration/explanation APIs remain
+unbounded. Inspection snapshots capture all namespaces through SQLite backup,
+are quarantined from writable stores, and cannot authorize `recall`, even when
+their historical proof graph labels a revision supported. See
+[operations](operations.md) for export privacy, diagnostics, publication failures,
+and why old memory state cannot safely be promoted as current evidence.
 
 ## Boundaries
 

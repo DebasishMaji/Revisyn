@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import os
 import sqlite3
+import threading
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
@@ -18,9 +19,12 @@ from .errors import (
     KeyConflict,
     MemoryNotFound,
     NamespaceMismatch,
+    ReadOnlyStore,
     RevisionConflict,
     SchemaError,
+    SnapshotUsageError,
     StoreClosed,
+    StoreUsageError,
     UnsupportedMemory,
 )
 from .models import (
@@ -30,48 +34,101 @@ from .models import (
     Kind,
     Memory,
     MemoryEvent,
+    MemoryEventPage,
+    MemoryPage,
     MemoryRef,
     State,
     encode_content,
     text,
 )
+from .snapshot import SnapshotInfo, database_issues, deadline_for, sqlite_deadline
+
+
+def _page_arguments(after_sequence: int, limit: int) -> None:
+    if (
+        isinstance(after_sequence, bool)
+        or not isinstance(after_sequence, int)
+        or not 0 <= after_sequence <= 2**63 - 1
+    ):
+        raise ValueError("after_sequence must be a nonnegative SQLite integer.")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        raise ValueError("limit must be an integer between 1 and 1000.")
 
 
 class MemoryStore:
-    def __init__(self, path: str | Path, *, namespace: str) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        namespace: str,
+        read_only: bool = False,
+        require_existing: bool = False,
+    ) -> None:
+        if not isinstance(read_only, bool) or not isinstance(require_existing, bool):
+            raise TypeError("read_only and require_existing must be booleans.")
         self._namespace = text(namespace, "namespace")
         self.path = Path(path)
+        self._owner = os.getpid(), threading.get_ident()
+        self._read_only = read_only
+        self._require_existing = require_existing
+        self._snapshot_info: SnapshotInfo | None = None
         if str(path) == ":memory:":
             raise ValueError("MemoryStore requires a durable filesystem path.")
-        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.close(descriptor)
+        if not read_only:
+            descriptor = os.open(
+                self.path, os.O_RDWR | (0 if require_existing else os.O_CREAT), 0o600
+            )
+            os.close(descriptor)
         with ExitStack() as setup:
-            self._connection = sqlite3.connect(self.path, isolation_level=None, timeout=5.0)
+            mode = "ro" if read_only else "rw"
+            self._connection = sqlite3.connect(
+                f"{self.path.resolve().as_uri()}?mode={mode}",
+                uri=True,
+                isolation_level=None,
+                timeout=5.0,
+            )
             setup.callback(self._connection.close)
             self._closed = False
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA synchronous = FULL")
-            with self._transaction(write=True):
-                self._initialize()
-            mode = self._connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-            if mode != "wal":
-                raise SchemaError("Revisyn requires SQLite write-ahead logging.")
+            if read_only:
+                self._connection.execute("PRAGMA query_only = ON")
+                with self._transaction():
+                    self.schema_version, self._snapshot_info = _schema.read_format(
+                        self._connection, allow_snapshot=True
+                    )
+            else:
+                with self._transaction(write=True):
+                    self._initialize()
+                self.schema_version = _schema.VERSION
+                mode = self._connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+                if mode != "wal":
+                    raise SchemaError("Revisyn requires SQLite write-ahead logging.")
             setup.pop_all()
 
     @property
     def namespace(self) -> str:
         return self._namespace
 
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    @property
+    def snapshot_info(self) -> SnapshotInfo | None:
+        return self._snapshot_info
+
     def _initialize(self) -> None:
         application = self._connection.execute("PRAGMA application_id").fetchone()[0]
         version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-        if application == _schema.APPLICATION_ID and version == _schema.VERSION:
+        if application != 0 or version != 0:
+            _schema.read_format(self._connection)
             return
         tables = self._connection.execute(
             "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
         ).fetchall()
-        if application != 0 or version != 0 or tables:
+        if tables or self._require_existing:
             raise SchemaError("Not an empty database or a supported Revisyn schema.")
         for statement in _schema.STATEMENTS:
             self._connection.execute(statement)
@@ -81,10 +138,14 @@ class MemoryStore:
     def _check_open(self) -> None:
         if self._closed:
             raise StoreClosed("The memory store is closed.")
+        if self._owner != (os.getpid(), threading.get_ident()):
+            raise StoreUsageError("Use a memory store only in its owning process and thread.")
 
     @contextmanager
     def _transaction(self, *, write: bool = False) -> Iterator[None]:
         self._check_open()
+        if write and self.read_only:
+            raise ReadOnlyStore("Read-only stores cannot modify evidence or history.")
         with self._connection:
             self._connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield
@@ -140,14 +201,76 @@ class MemoryStore:
     def recall(self, key: str) -> Memory:
         """Return the current supported revision, or fail explicitly."""
         text(key, "key")
+        self._check_open()
+        if self.snapshot_info is not None:
+            raise SnapshotUsageError(
+                "An inspection snapshot cannot authorize current memory reuse."
+            )
         with self._transaction():
-            ref = self._head(key)
-            if ref is None:
-                raise MemoryNotFound(f"No memory with key {key!r}.")
-            memory = self._load(ref)
+            memory = self._current(key)
             if memory.state is not State.SUPPORTED:
                 raise UnsupportedMemory(f"Memory {key!r} is {memory.state.value}.")
             return memory
+
+    def _current(self, key: str) -> Memory:
+        ref = self._head(key)
+        if ref is None:
+            raise MemoryNotFound(f"No memory with key {key!r}.")
+        return self._load(ref)
+
+    def inspect_current(self, key: str) -> Memory:
+        """Audit a head, including unsupported content; never use this as a reuse gate."""
+        text(key, "key")
+        with self._transaction():
+            return self._current(key)
+
+    def list_memories(
+        self, *, include_history: bool = False, after_sequence: int = 0, limit: int = 100
+    ) -> MemoryPage:
+        _page_arguments(after_sequence, limit)
+        if not isinstance(include_history, bool):
+            raise TypeError("include_history must be a boolean.")
+        with self._transaction():
+            join = (
+                ""
+                if include_history
+                else (" JOIN heads h ON m.namespace = h.namespace AND m.id = h.memory_id")
+            )
+            rows = self._connection.execute(
+                f"SELECT m.id FROM memories m{join} WHERE m.namespace = ? AND m.sequence > ? "
+                "ORDER BY m.sequence LIMIT ?",
+                (self.namespace, after_sequence, limit + 1),
+            ).fetchall()
+            memories = tuple(self._load(MemoryRef(self.namespace, row[0])) for row in rows[:limit])
+            return MemoryPage(memories, memories[-1].sequence if len(rows) > limit else None)
+
+    def status(self, *, timeout_seconds: float = 5.0) -> dict[str, JSONValue]:
+        with self._transaction(), sqlite_deadline(self._connection, deadline_for(timeout_seconds)):
+            issues = database_issues(self._connection)
+            counts: dict[str, JSONValue] = {
+                row[0]: row[1]
+                for row in self._connection.execute(
+                    "SELECT state, COUNT(*) FROM memories WHERE namespace = ? GROUP BY state",
+                    (self.namespace,),
+                )
+            }
+            events = self._connection.execute(
+                "SELECT COUNT(*), COALESCE(MAX(sequence), 0) FROM events WHERE namespace = ?",
+                (self.namespace,),
+            ).fetchone()
+            return {
+                "format_version": 1,
+                "source_schema_version": self.schema_version,
+                "namespace": self.namespace,
+                "healthy": not issues,
+                "issues": issues,
+                "memories_by_state": counts,
+                "event_count": events[0],
+                "last_event_sequence": events[1],
+                "snapshot": self.snapshot_info.as_dict()
+                if self.snapshot_info is not None
+                else None,
+            }
 
     def memories(self, *, include_history: bool = False) -> tuple[Memory, ...]:
         with self._transaction():
@@ -395,7 +518,14 @@ class MemoryStore:
             ),
         )
 
-    def _events(self, ref: MemoryRef) -> tuple[MemoryEvent, ...]:
+    def _events(
+        self, ref: MemoryRef, *, after_sequence: int = 0, limit: int | None = None
+    ) -> tuple[MemoryEvent, ...]:
+        parameters: list[str | int] = [self.namespace, self._ref(ref), after_sequence]
+        suffix = ""
+        if limit is not None:
+            suffix = " LIMIT ?"
+            parameters.append(limit)
         return tuple(
             MemoryEvent(
                 row["sequence"],
@@ -411,8 +541,9 @@ class MemoryStore:
                 row["recorded_at"],
             )
             for row in self._connection.execute(
-                "SELECT * FROM events WHERE namespace = ? AND memory_id = ? ORDER BY sequence",
-                (self.namespace, self._ref(ref)),
+                "SELECT * FROM events WHERE namespace = ? AND memory_id = ? "
+                f"AND sequence > ? ORDER BY sequence{suffix}",
+                parameters,
             )
         )
 
@@ -420,6 +551,16 @@ class MemoryStore:
         with self._transaction():
             self._load(ref)
             return self._events(ref)
+
+    def list_events(
+        self, ref: MemoryRef, *, after_sequence: int = 0, limit: int = 100
+    ) -> MemoryEventPage:
+        _page_arguments(after_sequence, limit)
+        with self._transaction():
+            self._load(ref)
+            events = self._events(ref, after_sequence=after_sequence, limit=limit + 1)
+            page = events[:limit]
+            return MemoryEventPage(page, page[-1].sequence if len(events) > limit else None)
 
     def explain(self, ref: MemoryRef) -> Explanation:
         with self._transaction():
@@ -443,6 +584,7 @@ class MemoryStore:
 
     def close(self) -> None:
         if not self._closed:
+            self._check_open()
             self._connection.close()
             self._closed = True
 

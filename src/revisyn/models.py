@@ -103,6 +103,18 @@ class MemoryEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryPage:
+    memories: tuple[Memory, ...]
+    next_sequence: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEventPage:
+    events: tuple[MemoryEvent, ...]
+    next_sequence: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class Explanation:
     target: Memory
     memories: tuple[Memory, ...]

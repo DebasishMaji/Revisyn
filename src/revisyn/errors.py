@@ -36,3 +36,15 @@ class SchemaError(RevisynError):
 
 class StoreClosed(RevisynError):
     pass
+
+
+class ReadOnlyStore(RevisynError):
+    """A write was attempted through an operator's read-only store."""
+
+
+class StoreUsageError(RevisynError):
+    """A connection was used outside its owning process or thread."""
+
+
+class SnapshotUsageError(RevisynError):
+    """Historical inspection state cannot authorize current memory reuse or writes."""
