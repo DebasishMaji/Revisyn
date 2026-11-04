@@ -1,32 +1,146 @@
 # Revisyn
 
-Changing a fact should change which memories an agent is allowed to reuse.
+### The fact changed. The cached plan did not.
 
-Revisyn tracks explicit dependencies between source evidence, derived memories,
-and reusable plans. Replacing or retracting a premise invalidates conclusions
-that have lost every declared proof. A conclusion with another complete proof
-stays supported.
+[![CI](https://github.com/DebasishMaji/Revisyn/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DebasishMaji/Revisyn/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Research alpha](https://img.shields.io/badge/status-research%20alpha-orange)](docs/research.md)
 
-**Research alpha.** Python 3.11+, macOS and Linux. Standard library only at runtime.
-This is a declared-dependency memory backend, not a vector database, an agent
-framework, or a model-unlearning system.
+An agent learns who owns a service, derives an approval route, and saves a
+deployment plan. Ownership changes. Retrieving the new owner does not, by itself,
+retire the old plan.
 
-## The failure
+**Revisyn tracks which evidence versions justify a memory.** When that evidence
+is replaced or withdrawn, it blocks reuse of conclusions that have lost every
+declared proof. Conclusions with another complete proof remain available.
 
-An agent learns that team A owns a service, derives an escalation procedure, and
-caches a deployment plan. Ownership changes to team B. Updating the ownership
-record alone does not retire the procedure or plan.
+Python 3.11+ | Standard-library core | Optional LangGraph integration | macOS and Linux
 
-Revisyn binds those derivations to immutable evidence versions. A new owner does
-not silently become a justification for a plan written for the old owner.
+> [!IMPORTANT]
+> Research alpha. Dependencies must be supplied by your application.
+> "Supported" means supported by the declared graph, not verified true in the
+> world. Revisyn is not automatic dependency extraction or model unlearning.
 
-## A small API
+[Run the demo](#see-what-changes-and-what-survives) |
+[LangGraph integration](docs/langgraph.md) |
+[Use the API](#bind-a-plan-to-its-evidence) |
+[Understand the graph](#proofs-not-just-parent-links) |
+[Evaluate the fit](#when-is-this-worth-integrating)
+
+## Updating a fact is not the same as updating its consequences
+
+After a service transfers from team A to team B, the old owner revision no
+longer supports the old approval route. The deployment plan loses its proof.
+But a public API contract still justifies the health check:
+
+```mermaid
+flowchart LR
+    owner["Owner A: superseded"] --> both{"AND"}
+    runbook["Team A runbook"] --> both
+    both --> route["Approval route A: invalidated"]
+    route --> plan["Deployment plan A: invalidated"]
+    both --> health["Health check: supported"]
+    contract["Public API contract"] -->|"alternative complete proof"| health
+    health --> diagnostic["Diagnostic plan: not rechecked"]
+
+    classDef withdrawn fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef retained fill:#dcfce7,stroke:#15803d,color:#14532d
+    class owner,route,plan withdrawn
+    class health,diagnostic retained
+```
+
+The new owner does not silently replace the old reference inside an existing
+proof. Rebuilding the deployment plan requires a new, explicit derivation.
+An unchanged health check stops propagation to its diagnostic descendant.
+
+## See what changes, and what survives
+
+With [uv](https://docs.astral.sh/uv/) installed:
 
 ```sh
 git clone https://github.com/DebasishMaji/Revisyn.git
 cd Revisyn
 uv sync --locked
+uv run python examples/memory_retraction.py
 ```
+
+**No API key, model, or external service.** The demo changes ownership, attempts
+stale reuse, reopens the database, and explicitly derives a replacement plan.
+Selected lines from the run:
+
+```text
+Invalidated: approval-route, deploy-plan
+Support checks: 3; checked memories retaining another proof: 1
+Blocked reuse: Memory 'deploy-plan' is invalidated.
+Health check remains supported by: public-health-contract
+The downstream diagnostic plan was not rechecked.
+```
+
+Reopening the store does not restore the old plan. The example then creates a
+new approval route and deployment plan from team B's evidence.
+
+To retain the database, add `--directory ./memory-demo`. The directory must be
+new; existing paths are rejected rather than overwritten.
+
+### Compare four policies on the same change
+
+```sh
+uv run revisyn lab > comparison.json
+```
+
+In the included **complete-provenance** fixture:
+
+| Policy | Incorrect plans reused | Valid plans unnecessarily blocked | Support checks |
+|---|---:|---:|---:|
+| Latest-record reuse | 1 | 0 | Not counted |
+| Blanket descendant invalidation | 0 | 2 | Not counted |
+| Full proof recomputation | 0 | 0 | 4 |
+| Revisyn selective maintenance | 0 | 0 | 3 |
+
+Full recomputation is the correctness reference, not a strawman. Revisyn matches
+its reuse decisions while avoiding the unchanged diagnostic descendant.
+
+These are counts from a small, fixed fixture, not a latency or scalability
+benchmark. The unit is **stored-plan reuse**, not executed deployments or model
+accuracy. Support checks are policy evaluations, not SQL query counts.
+
+> [!WARNING]
+> The laboratory also removes a required ownership dependency. Both Revisyn and
+> full recomputation then reuse the wrong deployment plan. A graph-maintenance
+> engine cannot repair evidence that was never declared.
+
+The independent world-state oracle keeps that failure visible. Exit 0 means the
+comparison completed, not that every policy passed. See the
+[laboratory contract](docs/laboratory.md) for fixtures, scoring, and counting rules.
+
+## Guard memory retrieval in LangGraph
+
+The optional integration exposes selected keys through an async LangChain tool.
+The application selects the store, namespace, and exposed keys; the model can
+request a key but cannot switch namespaces or use historical inspection.
+
+```sh
+uv sync --locked --extra langgraph
+uv run --extra langgraph python examples/langgraph_memory.py
+```
+
+The example uses a **real compiled graph** with a fresh-retrieval gate. The old
+plan remains in the conversation, but its next retrieval returns `blocked`
+without its content after ownership changes. An independently supported health
+check remains available. Tool choices are scripted; no model is called.
+It also pauses after a supported retrieval, changes the evidence, and resumes.
+The reuse gate rechecks the exact current reference instead of trusting the
+checkpoint's formerly supported response.
+
+This does not erase prior context or lock evidence across later actions. The
+application must enforce its reuse gate. See the [integration guide](docs/langgraph.md)
+for the response contract and async ownership requirements. Core imports remain
+independent of LangGraph.
+
+## Bind a plan to its evidence
+
+The integration below expects a new database or unused keys:
 
 ```python
 from revisyn import MemoryStore, UnsupportedMemory
@@ -60,95 +174,144 @@ with MemoryStore("memory.sqlite3", namespace="orders-agent") as memory:
     print(explanation.target.state)
 ```
 
-The example expects a new database or unused keys. Existing keys require the
-current reference in `replaces`; stale replacements raise `RevisionConflict`.
+Replacement requires the exact current reference in `replaces`. A stale writer
+gets `RevisionConflict`, rather than silently overwriting a newer observation.
+Re-observing a withdrawn fact does not reactivate conclusions bound to its old
+revision, even if the content looks identical.
 
-## Conjunction and alternatives
+## Proofs, not just parent links
+
+A conclusion can require several premises and still have an independent
+alternative:
 
 ```python
 supports = ((catalog.ref, runbook.ref), (public_contract.ref,))
 ```
 
-This means **(catalog AND runbook) OR public contract**. Revoking the catalog does
-not invalidate the conclusion if the public contract still supports it. Descendants
-of an unchanged conclusion are not reconsidered.
-
-`Change.rechecked` lists support checks, `invalidated` lists newly invalidated
-descendants, and `preserved` lists checked conclusions retaining a complete proof.
-These are semantic work counters, not measurements of SQL queries or latency.
-
-## Inspecting memory
-
-`recall(key)` returns only a supported current revision and raises explicitly
-otherwise. `get(ref)` is a historical/audit lookup that can return an unsupported
-record. `memories()` includes current unsupported records for inspection;
-`include_history=True` also includes older revisions.
-
-`history(ref)` retains state transitions and their initiating cause.
-`explain(ref)` returns a consistent snapshot of the target, all declared
-ancestors, and their event histories. Evidence and derived content survive restart.
-
-See [the semantics](docs/semantics.md) for the transaction and revision contract.
-
-## Run the memory-change demo
-
-```sh
-uv run python examples/memory_retraction.py
-uv run revisyn lab > comparison.json
+```text
+(catalog AND runbook) OR public contract
 ```
 
-The demo transfers a service from team A to team B. The old approval route and
-deployment plan become unavailable, including after reopening the store. A health
-check retains an alternative proof from the public API contract; its diagnostic
-descendant does not need rechecking. A separate explicit derivation creates the
-new team's deployment plan.
+Each inner tuple is a complete proof requiring **every** premise. Any surviving
+complete proof is sufficient. This avoids both stale reuse and indiscriminate
+invalidation of conclusions with independent support.
 
-Use `--directory ./memory-demo` to retain the demo database in a **new** directory.
-Existing paths are rejected. No model, API key, or external service is required.
+| Change field | Meaning |
+|---|---|
+| `invalidated` | Descendants that lost every declared proof. |
+| `rechecked` | Memories whose support was evaluated during propagation. |
+| `preserved` | Rechecked memories that retained a complete proof, not every unaffected memory. |
 
-The fixed laboratory compares latest-record reuse, blanket descendant invalidation,
-full proof recomputation, and Revisyn on identical declared inputs. The complete
-case matches full recomputation. The omitted-dependency case remains wrong under
-both proof-aware methods, as detected by a separate world-state oracle.
+Proofs reference immutable revisions, not whichever value a logical key happens
+to hold later. Revision history and proof dependencies are separate relationships.
 
-The unit is stored-plan reuse, not executed deployments or model accuracy.
-See the [laboratory contract](docs/laboratory.md) and
-[research direction](docs/research.md).
+### Read supported content; inspect historical content
 
-## What supported does not mean
+| API | Purpose |
+|---|---|
+| `recall(key)` | Return a supported current revision or raise explicitly. |
+| `get(ref)` | Inspect a specific historical revision, including unsupported content. |
+| `memories()` | Inspect current records, including unsupported ones; `include_history=True` adds older revisions. |
+| `history(ref)` | Inspect state transitions and their initiating cause. |
+| `explain(ref)` | Read the target, declared ancestors, and their histories in one consistent snapshot. |
+| `list_memories()` / `list_events(ref)` | Bounded, sequence-cursor pages for operator inspection. |
 
-It means supported by the **declared graph**, not verified true in the world.
-Revisyn does not extract missing dependencies, prove that a derivation rule is
-sound, verify a source, or infer that two keys mean the same thing.
+**Use `recall` to gate reuse.** Historical lookup is intentionally not a
+substitute: preserving an invalidated record for audit does not make it safe to
+feed back into an agent.
 
-An omitted dependency can leave a stale plan supported. Revocation cannot erase
-tokens already in a model's context, invalidate an unrelated cache, cancel an
-agent already acting, or undo an external effect. Applications must gate retrieval
-and recheck their evidence before consequential use.
+### Operate a controlled worker without reviving stale history
 
-The database stores content and provenance in plaintext. New database files are
-owner-only; existing permissions are not changed. Do not store credentials.
-Use local storage and one connection per thread. SQLite serializes writes;
-this is not a distributed memory service or an authorization boundary.
+After deliberate provisioning, `MemoryStore(path, namespace=..., require_existing=True)`
+rejects missing or uninitialized state. `read_only=True` opens an existing store
+without migration or writes; fresh per-call reads still see later evidence changes.
+
+```sh
+uv run revisyn list memory-demo/memory.sqlite3 --namespace orders --limit 100
+uv run revisyn status memory-demo/memory.sqlite3 --namespace orders
+uv run revisyn snapshot memory-demo/memory.sqlite3 \
+  --out memory-demo/incident.sqlite3
+```
+
+Full-database archives preserve all namespaces and plaintext content. They can
+be audited read-only, but writable stores and `recall` reject them: an archived
+"supported" plan is not current operational evidence. See the
+[embedded-worker runbook](docs/operations.md) for privacy, atomic publication,
+pagination, and recovery boundaries. This remains a research alpha.
+
+## When is this worth integrating?
+
+Consider it when your application already knows which evidence produced a
+summary, procedure, or plan, and needs to withdraw derived content without
+discarding everything else. The useful boundary is between **evidence changing**
+and **old conclusions being reused**.
+
+| Revisyn handles | Your application must supply |
+|---|---|
+| Immutable revisions and guarded replacement | Logical keys, source updates, and source authority. |
+| Selective invalidation across declared AND/OR proofs | Required dependencies and sound derivation rules. |
+| Supported-current-revision retrieval | Retrieval gating and rechecks before consequential use. |
+| Durable causal history and explanations | Authentication, access control, and data-retention policy. |
+
+It is the wrong starting point if you need automatic conversational fact
+extraction, vector search, a complete retrieval-augmented generation system, or
+guaranteed removal of information from a model.
+
+### Important boundaries
+
+| Boundary | Current contract |
+|---|---|
+| Correctness | Support is relative to declared evidence; missing dependencies can leave stale plans available. |
+| Graph | New derivations reference existing revisions; no stored cycles, recursive rules, or negative premises. |
+| Atomicity | Revision changes, invalidation, and causal events commit together in SQLite. |
+| Deployment | Local storage, one connection per thread; SQLite serializes writes. Not a distributed memory service. |
+| Privacy | Content and provenance are plaintext. New files are owner-only; existing permissions are unchanged. Do not store credentials. |
+
+Retraction does not erase tokens already in a model's context, invalidate an
+unrelated cache, cancel an agent already acting, or undo an external effect.
+Nor does Revisyn authenticate a source, prove a rule sound, or infer equivalent
+logical keys.
+
+## Design and research
+
+**Question:** can explicit provenance reduce incorrect reuse of derived agent
+memories after evidence changes, without unnecessarily discarding valid plans?
 
 Truth maintenance and incremental view maintenance predate agent memory.
-The research question is whether explicit dependencies improve downstream action
-correctness under controlled changes and incomplete provenance. No algorithmic
-novelty or comparative model result is claimed.
+Revisyn does not claim a new belief-revision algorithm. The included laboratory
+and generated-graph cases establish a starting point, not comparative model
+results or evidence of production adoption.
 
-Revisyn concerns recorded evidence and retrieval. The complementary
-[Aegentra](https://github.com/DebasishMaji/Aegentra) project concerns ambiguous
-external tool effects. These are separate boundaries; no automatic integration
-is included.
+| Read next | Contract |
+|---|---|
+| [LangGraph integration](docs/langgraph.md) | Exposed keys, guarded tool responses, graph gates, and ownership constraints. |
+| [Semantics](docs/semantics.md) | Revisions, transactions, support propagation, history, and failure behavior. |
+| [Operations](docs/operations.md) | Read-only operators, fail-closed startup, inspection archives, and recovery safeguards. |
+| [Laboratory](docs/laboratory.md) | The versioned ownership-transfer fixture and independent oracle. |
+| [Research gates](docs/research.md) | Prior art, missing-provenance experiments, and evaluation requirements. |
+| [Implementation](src/revisyn/store.py) | The SQLite backend and selective maintenance logic. |
 
-## Development
+[Aegentra](https://github.com/DebasishMaji/Aegentra) addresses a different
+boundary: unresolved external tool effects. Revisyn addresses evidence and
+retrieval. No automatic integration between the libraries is included.
+
+## Contributing
 
 ```sh
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy
+uv sync --locked --extra langgraph
+uv run --extra langgraph pytest
+uv run --extra langgraph ruff check .
+uv run --extra langgraph ruff format --check .
+uv run --extra langgraph mypy
 uv build
 ```
+
+Cases cover rollback during invalidation, subprocess crashes, concurrent
+replacement conflicts, consistent explanations, deep proof chains, and agreement
+with independent full recomputation. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+before changing proof semantics or experimental claims.
+
+An integration that exposes missing provenance is valuable evidence, not a
+failure to hide.
 
 Licensed under [Apache 2.0](LICENSE). See [NOTICE](NOTICE).
