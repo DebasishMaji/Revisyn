@@ -212,6 +212,61 @@ def test_snapshots_and_json_payloads_are_detached_from_callers(store):
     assert store.recall("json").content == {"items": [1, 0.125, {"active": True}]}
 
 
+def test_recall_can_require_the_exact_current_revision_even_for_identical_content(store):
+    original = fact(store, "plan")
+    assert store.recall("plan", expected_ref=original.ref) == original
+    replacement = store.observe(
+        "plan", original.content, source="source/2", replaces=original.ref
+    ).memory
+    assert store.recall("plan") == replacement
+    events = store.history(replacement.ref)
+    with pytest.raises(RevisionConflict, match="expected revision"):
+        store.recall("plan", expected_ref=original.ref)
+    assert store.recall("plan", expected_ref=replacement.ref) == replacement
+    assert store.history(replacement.ref) == events
+    store.retract(replacement.ref, reason="Plan withdrawn.")
+    with pytest.raises(RevisionConflict):
+        store.recall("plan", expected_ref=original.ref)
+    with pytest.raises(UnsupportedMemory):
+        store.recall("plan", expected_ref=replacement.ref)
+
+
+def test_exact_recall_still_requires_support_and_matching_key(store):
+    owner = fact(store, "owner")
+    plan = store.derive("plan", "private plan", supports=((owner.ref,),), rule="plan/1").memory
+    with pytest.raises(RevisionConflict):
+        store.recall("owner", expected_ref=plan.ref)
+    with pytest.raises(MemoryNotFound):
+        store.recall("missing", expected_ref=plan.ref)
+    store.retract(owner.ref, reason="Owner withdrawn.")
+    with pytest.raises(UnsupportedMemory):
+        store.recall("plan", expected_ref=plan.ref)
+    with pytest.raises(UnsupportedMemory):
+        store.recall("owner", expected_ref=owner.ref)
+
+
+def test_exact_recall_rejects_foreign_or_untyped_references(store):
+    original = fact(store, "plan")
+    with pytest.raises(NamespaceMismatch):
+        store.recall("plan", expected_ref=MemoryRef("foreign", original.ref.id))
+    with pytest.raises(TypeError, match="MemoryRef"):
+        store.recall("plan", expected_ref=original.ref.id)
+
+
+def test_read_only_exact_recall_sees_replacements_before_its_next_call(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="orders") as writer:
+        original = fact(writer, "plan")
+        with MemoryStore(path, namespace="orders", read_only=True) as reader:
+            assert reader.recall("plan", expected_ref=original.ref) == original
+            replacement = writer.observe(
+                "plan", "replacement", source="source/2", replaces=original.ref
+            ).memory
+            with pytest.raises(RevisionConflict):
+                reader.recall("plan", expected_ref=original.ref)
+            assert reader.recall("plan", expected_ref=replacement.ref) == replacement
+
+
 @pytest.mark.parametrize(
     "content", [float("nan"), float("inf"), {"bad": object()}, {1: "coerced"}, (1, 2), b"binary"]
 )

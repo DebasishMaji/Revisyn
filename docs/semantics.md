@@ -30,6 +30,24 @@ Historical snapshots do not update in place in the caller. Fetch again to learn
 the current state. Supported memories are not automatically verified statements
 about the external world.
 
+## Guarded reuse of a saved revision
+
+`recall(key)` returns the supported current revision. If an application needs to
+reuse a previously retrieved revision rather than accept any current replacement,
+call `recall(key, expected_ref=saved.ref)`. Reference equality and current support
+are checked in the same read transaction. Identical replacement content is still
+a different revision and does not satisfy this precondition.
+
+A missing key raises `MemoryNotFound`. A different head raises `RevisionConflict`,
+even if that head is unsupported. A matching but unsupported head raises
+`UnsupportedMemory`. References must be typed `MemoryRef` values in the store's
+namespace. Rejection does not change content, support, or audit history.
+Inspection snapshots cannot authorize reuse, with or without `expected_ref`.
+
+This is a point-in-time read precondition, not a lease or a lock spanning later
+reasoning or an external action. A concurrent writer may commit after the read's
+snapshot; applications still own the consequential action boundary.
+
 ## Creation and replacement
 
 `observe` creates a fact; `derive` creates a derived memory. An existing key

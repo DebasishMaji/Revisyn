@@ -99,8 +99,12 @@ A checkpoint can contain either a queued tool call or an already completed,
 formerly supported response. A queued call uses current evidence when resumed,
 but replaying an old response does not itself call `recall` again.
 
-The example's application-owned reuse gate therefore recalls the key again and
-requires the supported current revision to match the response's exact reference.
+The example's application-owned reuse gate calls
+`store.recall(key, expected_ref=saved_reference)`. The store requires both current
+support and the response's exact revision in one read transaction.
+`RevisionConflict` blocks a replaced revision, while `UnsupportedMemory` blocks
+one that has lost support. Missing keys also block reuse; unexpected errors
+continue to propagate.
 It also pauses a compiled graph after retrieval, changes the ownership evidence,
 and resumes: the old `supported` message remains, but reuse is blocked. A newly
 supported replacement must be retrieved explicitly rather than silently

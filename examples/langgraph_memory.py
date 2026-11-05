@@ -12,7 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from revisyn import MemoryNotFound, MemoryStore, UnsupportedMemory
+from revisyn import MemoryNotFound, MemoryRef, MemoryStore, RevisionConflict, UnsupportedMemory
 from revisyn.integrations.langgraph import recall_tool
 from revisyn.lab import seed_deployment
 
@@ -28,17 +28,12 @@ async def gate_reuse(state: RecallState, *, store: MemoryStore) -> dict[str, boo
     result = json.loads(message.content)
     if result["status"] != "supported":
         return {"reuse_allowed": False}
+    reference = result["reference"]
     try:
-        current = store.recall(result["key"])
-    except (MemoryNotFound, UnsupportedMemory):
+        store.recall(result["key"], expected_ref=MemoryRef(reference["namespace"], reference["id"]))
+    except (MemoryNotFound, RevisionConflict, UnsupportedMemory):
         return {"reuse_allowed": False}
-    return {
-        "reuse_allowed": result["reference"]
-        == {
-            "namespace": current.ref.namespace,
-            "id": current.ref.id,
-        }
-    }
+    return {"reuse_allowed": True}
 
 
 def request(key: str, call_id: str) -> AIMessage:

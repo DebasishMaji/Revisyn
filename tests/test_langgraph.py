@@ -1,5 +1,7 @@
 import asyncio
 import json
+import runpy
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -205,6 +207,52 @@ def test_queued_checkpoint_retrieval_uses_evidence_at_resume_time(tmp_path: Path
         assert response.tool_call_id == "queued-call"
         assert json.loads(response.content) == {"status": "blocked", "key": "plan"}
         assert "private plan A" not in response.content
+
+
+@pytest.mark.parametrize("change", ["none", "replacement", "invalidation"])
+def test_example_checkpoint_gate_requires_the_same_supported_revision(tmp_path: Path, change):
+    example = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "examples" / "langgraph_memory.py")
+    )
+    with MemoryStore(tmp_path / "memory.sqlite3", namespace="orders") as store:
+        owner = store.observe("owner", "A", source="catalog/1").memory
+        plan = store.derive(
+            "plan", "private plan A", supports=((owner.ref,),), rule="plan/1"
+        ).memory
+        tool = integration.recall_tool(store, keys=("plan",))
+        builder = graphs.StateGraph(example["RecallState"])
+        builder.add_node("tools", prebuilt.ToolNode([tool], handle_tool_errors=False))
+        builder.add_node("gate", partial(example["gate_reuse"], store=store))
+        builder.add_edge(graphs.START, "tools")
+        builder.add_edge("tools", "gate")
+        builder.add_edge("gate", graphs.END)
+        graph = builder.compile(checkpointer=checkpoints.InMemorySaver(), interrupt_after=["tools"])
+        config = {"configurable": {"thread_id": "completed-retrieval"}}
+
+        async def execute():
+            paused = await graph.ainvoke(
+                {"messages": [example["request"]("plan", "saved")], "reuse_allowed": False},
+                config,
+            )
+            response = json.loads(paused["messages"][-1].content)
+            assert response["status"] == "supported"
+            assert response["reference"]["id"] == plan.ref.id
+            if change == "replacement":
+                store.derive(
+                    "plan",
+                    "private plan B",
+                    supports=((owner.ref,),),
+                    rule="plan/2",
+                    replaces=plan.ref,
+                )
+                assert store.recall("plan").content == "private plan B"
+            elif change == "invalidation":
+                store.retract(owner.ref, reason="Evidence withdrawn.")
+            return await graph.ainvoke(None, config)
+
+        resumed = asyncio.run(execute())
+        assert resumed["reuse_allowed"] is (change == "none")
+        assert json.loads(resumed["messages"][-1].content)["content"] == "private plan A"
 
 
 def test_synchronous_invocation_is_explicitly_unsupported(tmp_path: Path):

@@ -198,8 +198,8 @@ class MemoryStore:
         with self._transaction():
             return self._load(ref)
 
-    def recall(self, key: str) -> Memory:
-        """Return the current supported revision, or fail explicitly."""
+    def recall(self, key: str, *, expected_ref: MemoryRef | None = None) -> Memory:
+        """Return the supported current revision, optionally requiring an exact reference."""
         text(key, "key")
         self._check_open()
         if self.snapshot_info is not None:
@@ -207,7 +207,11 @@ class MemoryStore:
                 "An inspection snapshot cannot authorize current memory reuse."
             )
         with self._transaction():
+            if expected_ref is not None:
+                self._ref(expected_ref)
             memory = self._current(key)
+            if expected_ref is not None and memory.ref != expected_ref:
+                raise RevisionConflict(f"Memory {key!r} no longer matches the expected revision.")
             if memory.state is not State.SUPPORTED:
                 raise UnsupportedMemory(f"Memory {key!r} is {memory.state.value}.")
             return memory
