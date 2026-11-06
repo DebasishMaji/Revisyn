@@ -18,9 +18,11 @@ from revisyn import (
     NamespaceMismatch,
     RevisionConflict,
     SchemaError,
+    SnapshotUsageError,
     State,
     StoreClosed,
     UnsupportedMemory,
+    snapshot_database,
 )
 
 
@@ -265,6 +267,101 @@ def test_read_only_exact_recall_sees_replacements_before_its_next_call(tmp_path)
             with pytest.raises(RevisionConflict):
                 reader.recall("plan", expected_ref=original.ref)
             assert reader.recall("plan", expected_ref=replacement.ref) == replacement
+
+
+def test_recall_many_preserves_input_order_duplicates_and_empty_batches(store):
+    first, second = fact(store, "first"), fact(store, "second")
+    assert store.recall_many(("second", "first", "second")) == (second, first, second)
+    assert store.recall_many([]) == ()
+
+
+def test_recall_many_uses_one_snapshot_during_a_concurrent_evidence_change(store, monkeypatch):
+    owner = fact(store, "owner")
+    plan = store.derive("plan", "team A", supports=((owner.ref,),), rule="plan/1").memory
+    original = store._load
+    changed = False
+
+    def interleaved(ref):
+        nonlocal changed
+        result = original(ref)
+        if not changed:
+            changed = True
+            with MemoryStore(store.path, namespace=store.namespace) as writer:
+                writer.observe("owner", "team B", source="owner/2", replaces=owner.ref)
+        return result
+
+    monkeypatch.setattr(store, "_load", interleaved)
+    recalled = store.recall_many(("owner", "plan"))
+    assert recalled == (owner, plan)
+    assert recalled[1].supports == ((recalled[0].ref,),)
+    assert all(memory.state is State.SUPPORTED for memory in recalled)
+    assert store.recall("owner").content == "team B"
+    with pytest.raises(UnsupportedMemory):
+        store.recall_many(("owner", "plan"))
+
+
+@pytest.mark.parametrize("withdraw", ["fact", "premise"])
+def test_recall_many_fails_without_a_partial_result_for_unsupported_keys(store, withdraw):
+    owner, independent = fact(store, "owner"), fact(store, "independent")
+    plan = store.derive("plan", "team A", supports=((owner.ref,),), rule="plan/1").memory
+    store.retract(owner.ref if withdraw == "premise" else plan.ref, reason="Withdrawn.")
+    before = store.memories(include_history=True)
+    with pytest.raises(UnsupportedMemory):
+        store.recall_many(("independent", "plan"))
+    assert store.memories(include_history=True) == before
+    assert store.recall("independent") == independent
+
+
+def test_recall_many_missing_key_is_explicit_and_does_not_create_state(store):
+    known = fact(store, "known")
+    before = store.history(known.ref)
+    with pytest.raises(MemoryNotFound):
+        store.recall_many(("known", "absent"))
+    assert store.history(known.ref) == before
+    assert store.recall_many(("known",)) == (known,)
+
+
+@pytest.mark.parametrize("keys", ["plan", b"plan", None, {"plan"}])
+def test_recall_many_requires_a_key_sequence(store, keys):
+    with pytest.raises(TypeError, match="sequence"):
+        store.recall_many(keys)
+
+
+@pytest.mark.parametrize("keys", [("known", ""), ("known", 1)])
+def test_recall_many_validates_every_key_before_reading(store, keys):
+    with pytest.raises(ValueError, match="key"):
+        store.recall_many(keys)
+
+
+def test_read_only_recall_many_is_fresh_and_namespace_scoped(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path, namespace="other") as other:
+        fact(other, "foreign")
+    with MemoryStore(path, namespace="orders") as writer:
+        owner = fact(writer, "owner")
+        plan = writer.derive("plan", "team A", supports=((owner.ref,),), rule="plan/1").memory
+        with MemoryStore(path, namespace="orders", read_only=True) as reader:
+            assert reader.recall_many(("plan", "owner")) == (plan, owner)
+            with pytest.raises(MemoryNotFound):
+                reader.recall_many(("foreign",))
+            writer.retract(owner.ref, reason="Owner withdrawn.")
+            with pytest.raises(UnsupportedMemory):
+                reader.recall_many(("plan",))
+
+
+def test_recall_many_rejects_closed_stores_and_inspection_snapshots(tmp_path):
+    path, archive = tmp_path / "memory.sqlite3", tmp_path / "archive.sqlite3"
+    with MemoryStore(path, namespace="orders") as store:
+        original = fact(store, "known")
+        snapshot_database(path, archive)
+    with pytest.raises(StoreClosed):
+        store.recall_many(())
+    with MemoryStore(archive, namespace="orders", read_only=True) as audit:
+        assert audit.get(original.ref) == original
+        with pytest.raises(SnapshotUsageError):
+            audit.recall_many(("known",))
+        with pytest.raises(SnapshotUsageError):
+            audit.recall_many(())
 
 
 @pytest.mark.parametrize(

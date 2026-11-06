@@ -48,6 +48,32 @@ This is a point-in-time read precondition, not a lease or a lock spanning later
 reasoning or an external action. A concurrent writer may commit after the read's
 snapshot; applications still own the consequential action boundary.
 
+## Read related memories together
+
+Use `recall_many` when a decision needs several current memories:
+
+```python
+owner, plan = store.recall_many(("service-owner", "deployment-plan"))
+```
+
+The method checks current support and returns memories in input order from one
+read transaction. Separate `recall` calls can observe a replacement between
+reads; this batch instead uses one consistent SQLite view. A concurrent writer
+may commit while that view is open, so the next read can see different evidence.
+
+All keys must be nonempty strings in a sequence, not a bare string. Duplicates
+are preserved; an empty sequence returns `()`, but still requires an open live
+store. The first missing or unsupported key raises `MemoryNotFound` or
+`UnsupportedMemory` without returning a partial result or changing audit history.
+Unexpected storage errors propagate. Read-only live stores are supported;
+inspection snapshots cannot authorize batch reuse, including empty batches.
+
+This returns current heads, not necessarily previously saved references.
+Compare returned references with the versions a saved plan requires. A shared
+read view does not establish that the memories agree semantically, infer omitted
+dependencies, or lock evidence across a subsequent external action.
+Batch size is application-controlled; there is no record-count or time budget.
+
 ## Creation and replacement
 
 `observe` creates a fact; `derive` creates a derived memory. An existing key

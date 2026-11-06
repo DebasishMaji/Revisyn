@@ -40,14 +40,13 @@ def demonstrate(directory: Path) -> None:
             f"checked memories retaining another proof: {len(change.preserved)}"
         )
         require_blocked(store, "deploy-plan")
-        health = store.recall("health-check")
+        health, _ = store.recall_many(("health-check", "diagnostic-plan"))
         explanation = store.explain(health.ref)
         proof = explanation.satisfied_supports
         print(
             "Health check remains supported by:",
             ", ".join(store.get(ref).key for group in proof for ref in group),
         )
-        store.recall("diagnostic-plan")
         if seed.diagnose.ref in change.rechecked:
             raise RuntimeError("An unchanged health check should not recheck its descendants.")
         print("The downstream diagnostic plan was not rechecked.")

@@ -201,20 +201,37 @@ class MemoryStore:
     def recall(self, key: str, *, expected_ref: MemoryRef | None = None) -> Memory:
         """Return the supported current revision, optionally requiring an exact reference."""
         text(key, "key")
+        self._check_recall()
+        with self._transaction():
+            return self._supported_current(key, expected_ref=expected_ref)
+
+    def recall_many(self, keys: Sequence[str]) -> tuple[Memory, ...]:
+        """Return supported current revisions in input order from one read transaction."""
+        if isinstance(keys, (str, bytes)) or not isinstance(keys, Sequence):
+            raise TypeError("keys must be a sequence of key strings.")
+        requested = tuple(keys)
+        for key in requested:
+            text(key, "key")
+        self._check_recall()
+        with self._transaction():
+            return tuple(self._supported_current(key) for key in requested)
+
+    def _check_recall(self) -> None:
         self._check_open()
         if self.snapshot_info is not None:
             raise SnapshotUsageError(
                 "An inspection snapshot cannot authorize current memory reuse."
             )
-        with self._transaction():
-            if expected_ref is not None:
-                self._ref(expected_ref)
-            memory = self._current(key)
-            if expected_ref is not None and memory.ref != expected_ref:
-                raise RevisionConflict(f"Memory {key!r} no longer matches the expected revision.")
-            if memory.state is not State.SUPPORTED:
-                raise UnsupportedMemory(f"Memory {key!r} is {memory.state.value}.")
-            return memory
+
+    def _supported_current(self, key: str, *, expected_ref: MemoryRef | None = None) -> Memory:
+        if expected_ref is not None:
+            self._ref(expected_ref)
+        memory = self._current(key)
+        if expected_ref is not None and memory.ref != expected_ref:
+            raise RevisionConflict(f"Memory {key!r} no longer matches the expected revision.")
+        if memory.state is not State.SUPPORTED:
+            raise UnsupportedMemory(f"Memory {key!r} is {memory.state.value}.")
+        return memory
 
     def _current(self, key: str) -> Memory:
         ref = self._head(key)

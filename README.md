@@ -211,6 +211,7 @@ to hold later. Revision history and proof dependencies are separate relationship
 |---|---|
 | `recall(key)` | Return a supported current revision or raise explicitly. |
 | `recall(key, expected_ref=saved.ref)` | Require that exact revision to remain current and supported. |
+| `recall_many(keys)` | Return all requested supported current revisions from one consistent read view, or raise. |
 | `get(ref)` | Inspect a specific historical revision, including unsupported content. |
 | `memories()` | Inspect current records, including unsupported ones; `include_history=True` adds older revisions. |
 | `history(ref)` | Inspect state transitions and their initiating cause. |
@@ -226,6 +227,12 @@ replacement raises `RevisionConflict` instead of silently substituting different
 content. Reference and support checks share one read transaction, not a lock
 across a later action. See the [reuse precondition](docs/semantics.md#guarded-reuse-of-a-saved-revision)
 for error precedence and concurrency limits.
+
+For a decision requiring several memories, use `recall_many(("owner", "plan"))`
+instead of assembling separate reads that can straddle an evidence update.
+It preserves input order and fails without a partial result if any key is
+missing or unsupported. See [batch retrieval](docs/semantics.md#read-related-memories-together)
+for snapshot, reference, and concurrency limits.
 
 ### Operate a controlled worker without reviving stale history
 
