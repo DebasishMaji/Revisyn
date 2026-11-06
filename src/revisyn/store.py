@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import heapq
 import os
 import sqlite3
+import tempfile
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
@@ -55,6 +57,28 @@ def _page_arguments(after_sequence: int, limit: int) -> None:
         raise ValueError("limit must be an integer between 1 and 1000.")
 
 
+def _provision(path: Path, *, require_existing: bool) -> None:
+    # Opening and closing an existing file outside SQLite can drop another connection's locks.
+    try:
+        path.stat()
+    except FileNotFoundError:
+        if require_existing:
+            raise
+        descriptor, name = tempfile.mkstemp(prefix=".revisyn-provision-", dir=path.parent)
+        temporary = Path(name)
+        try:
+            os.close(descriptor)
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                # A concurrent provisioner won; SQLite will validate its file without replacing it.
+                pass
+        finally:
+            temporary.unlink()
+    if not os.access(path, os.R_OK | os.W_OK, effective_ids=True):
+        raise PermissionError(errno.EACCES, "Read/write database access is required.", path)
+
+
 class MemoryStore:
     def __init__(
         self,
@@ -74,15 +98,13 @@ class MemoryStore:
         self._snapshot_info: SnapshotInfo | None = None
         if str(path) == ":memory:":
             raise ValueError("MemoryStore requires a durable filesystem path.")
+        database_path = self.path.resolve()
         if not read_only:
-            descriptor = os.open(
-                self.path, os.O_RDWR | (0 if require_existing else os.O_CREAT), 0o600
-            )
-            os.close(descriptor)
+            _provision(database_path, require_existing=require_existing)
         with ExitStack() as setup:
             mode = "ro" if read_only else "rw"
             self._connection = sqlite3.connect(
-                f"{self.path.resolve().as_uri()}?mode={mode}",
+                f"{database_path.as_uri()}?mode={mode}",
                 uri=True,
                 isolation_level=None,
                 timeout=5.0,

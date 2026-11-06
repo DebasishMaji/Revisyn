@@ -28,6 +28,10 @@ payload, exposed keys must be application-controlled, and unexpected store error
 must propagate rather than turning into missing memories. Keep synchronous
 SQLite work in the connection's owning thread.
 
+Never open and close an existing database file outside SQLite: POSIX close can
+release other connections' locks in the same process. Provision only a closed
+private file, and preserve the child-process lock-retention regression.
+
 Keep the independent oracle and missing-dependency failure in the laboratory.
 A strong recomputation baseline matching Revisyn is the expected result.
 Do not relabel plan reuse as executed-agent accuracy or support-check counts as

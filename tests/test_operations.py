@@ -32,6 +32,109 @@ def cli(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def assert_sqlite_main_lock_held(path: Path) -> None:
+    """Probe SQLite's shared-lock range from a child, leaving this process's locks alone."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import fcntl
+import os
+import sys
+
+descriptor = os.open(sys.argv[1], os.O_RDWR)
+try:
+    try:
+        fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, 0x40000002)
+    except BlockingIOError:
+        print("held")
+    else:
+        print("released")
+finally:
+    os.close(descriptor)
+""",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert result.stdout.strip() == "held"
+
+
+@pytest.mark.parametrize("mode", ["default", "require_existing", "read_only"])
+def test_starting_another_store_preserves_the_original_sqlite_lock(
+    tmp_path: Path, mode: str
+) -> None:
+    path = tmp_path / "live.db"
+    with MemoryStore(path, namespace="orders") as original:
+        owner = original.observe("owner", "A", source="catalog").memory
+        assert_sqlite_main_lock_held(path)
+        with MemoryStore(
+            path,
+            namespace="orders",
+            require_existing=mode == "require_existing",
+            read_only=mode == "read_only",
+        ) as another:
+            assert_sqlite_main_lock_held(path)
+            assert another.recall("owner") == owner
+        assert_sqlite_main_lock_held(path)
+        assert original.recall("owner") == owner
+
+
+def test_provisioning_never_overwrites_a_concurrent_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "live.db"
+
+    def race(source: Path, target: Path) -> None:
+        target.write_bytes(b"another provisioner's file")
+        raise FileExistsError("Another provisioner won.")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "link", race)
+        with pytest.raises(sqlite3.DatabaseError):
+            MemoryStore(path, namespace="orders")
+    assert path.read_bytes() == b"another provisioner's file"
+    assert not list(tmp_path.glob(".revisyn-provision-*"))
+
+
+def test_failed_provisioning_cleans_temporary_files_without_creating_a_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "live.db"
+
+    def fail(source: Path, target: Path) -> None:
+        raise OSError("Injected provisioning failure.")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "link", fail)
+        with pytest.raises(OSError, match="Injected provisioning"):
+            MemoryStore(path, namespace="orders")
+    assert not path.exists()
+    assert not list(tmp_path.glob(".revisyn-provision-*"))
+    with MemoryStore(path, namespace="orders"):
+        pass
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="Root can write files without write mode bits.")
+def test_writable_store_still_rejects_a_filesystem_read_only_database(tmp_path: Path) -> None:
+    path = tmp_path / "live.db"
+    with MemoryStore(path, namespace="orders"):
+        pass
+    path.chmod(0o400)
+    try:
+        with pytest.raises(PermissionError):
+            MemoryStore(path, namespace="orders", require_existing=True)
+        with MemoryStore(path, namespace="orders", read_only=True) as reader:
+            assert reader.memories() == ()
+    finally:
+        path.chmod(0o600)
+
+
 def test_read_only_recall_is_fresh_and_all_mutations_are_rejected(tmp_path: Path) -> None:
     path = tmp_path / "memory ?#.db"
     with MemoryStore(path, namespace="orders") as writer:

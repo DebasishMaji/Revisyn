@@ -25,6 +25,21 @@ fallback after a worker-open error.
 different valid live file can still contain the wrong or incomplete history.
 Deployment owners must keep the correct live volume authoritative.
 
+Existing database files are opened only through SQLite. Opening and closing a
+raw descriptor, even to check permissions, can release another connection's
+process-wide POSIX locks; see [SQLite's locking caveat, section 2.2](https://www.sqlite.org/howtocorrupt.html).
+Do not independently open/read/close a live database in the same process.
+Use the store's read APIs and `snapshot_database` instead.
+
+Deliberate first-time provisioning creates a private `0600` empty file in the
+same directory, closes its descriptor, and publishes it with an exclusive hard
+link. The temporary name is removed before SQLite connects. A concurrent
+provisioner's file is never overwritten and still undergoes normal schema
+validation. This requires local hard-link support when provisioning; opening an
+existing store does not publish a file. Existing permissions are preserved, and
+writable startup rejects files without effective-user read/write access.
+File publication is not schema initialization, recovery, or authentication.
+
 Create each connection in its owning process/thread, after fork. Reads, writes,
 and close reject ownership misuse explicitly. Separate connections may share
 the same trusted local SQLite file; writes remain serialized through
